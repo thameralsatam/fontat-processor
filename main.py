@@ -1,47 +1,40 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from fontTools.varLib import mutator
 from fontTools.ttLib import TTFont
+from fontTools.varLib import instancer
 import io
+import json
 
 app = FastAPI()
 
-# هذا الجزء مهم جداً عشان يسمح لموقعك يتصل بالسيرفر بدون مشاكل أمنية (CORS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.get("/")
 def read_root():
-    return {"status": "Font Processor is Running"}
+    return {"status": "Fontat Processor is Online"}
 
 @app.post("/convert")
-async def convert_font(font: UploadFile = File(...), wght: float = Form(...)):
+async def convert_font(
+    font: UploadFile = File(...),
+    # هنا استلمنا "كل الإعدادات" كـ نص JSON عشان نكون مرنين
+    settings: str = Form(...) 
+):
     try:
-        # 1. قراءة الملف المرفوع وتحويله لنظام يفهمه بايثون
+        target_settings = json.loads(settings)
         input_data = await font.read()
         var_font = TTFont(io.BytesIO(input_data))
         
-        # 2. تحديد الإحداثيات (الوزن اللي اختاره المستخدم)
-        location = {'wght': wght}
+        # تنفيذ التعديل بناءً على كل المحاور المرسلة (wght, swsh, kash, etc.)
+        static_font = instancer.instantiateVariableFont(var_font, target_settings)
         
-        # 3. عملية التحويل السحرية (instantiate) اللي بتحافظ على العربي
-        static_font = mutator.instantiateVariableFont(var_font, location)
-        
-        # 4. حفظ النتيجة في ذاكرة مؤقتة
         out = io.BytesIO()
         static_font.save(out)
-        
-        # 5. إرسال الملف النهائي للمتصفح
-        return Response(
-            content=out.getvalue(),
-            media_type="font/ttf",
-            headers={"Content-Disposition": f"attachment; filename=fontat-static.ttf"}
-        )
+        return Response(content=out.getvalue(), media_type="font/ttf")
     except Exception as e:
-        return {"error": str(e)}
+        return Response(content=json.dumps({"error": str(e)}), status_code=400)
