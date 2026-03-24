@@ -3,7 +3,8 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
-from fontTools.otTables import FeatureRecord, Feature
+# التعديل هنا: استيراد الكلاسات من المسار العام للمكتبة
+from fontTools.ttLib.tables.otTables import FeatureRecord, Feature
 import io
 import json
 
