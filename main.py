@@ -51,12 +51,17 @@ async def convert_font(
         try:
             command = [sys.executable, "-m", "pyftfeatfreeze"]
             
-            # تنظيف الميزات من التكرار لضمان عدم حدوث Error
+            # تنظيف الميزات من التكرار
             unique_features = list(set(requested_features))
-            for feat in unique_features:
-                command.extend(["-o", feat])
             
-            command.extend(["-r", "--no-rename", tmp_in_path, tmp_out_path])
+            # تمرير الميزات بالطريقة الصحيحة لأداة pyftfeatfreeze
+            if unique_features:
+                features_str = ",".join(unique_features)
+                command.extend(["-f", features_str])
+            
+            # تحديد ملف الإدخال والإخراج 
+            # (تم إزالة -o الخاطئة واستخدام المسارات كـ Positional Arguments)
+            command.extend(["--no-rename", tmp_in_path, tmp_out_path])
             
             subprocess.run(command, check=True, capture_output=True)
             
