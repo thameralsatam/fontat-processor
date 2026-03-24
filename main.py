@@ -47,41 +47,43 @@ async def convert_font(
             
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
-        # 3. 🔥 التفعيل الاحترافي (Smart Default Activation)
-        arabic_essentials = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
+        # 3. 🔥 تنفيذ الميزات المطلوبة من الموقع فقط
+        requested_features = data.get("features", [])
         
-        command = [sys.executable, "-m", "pyftfeatfreeze"]
-        
-        # تفعيل ميزات المستخدم
-        for feat in requested_features:
-            command.extend(["-o", feat])
-        
-        # تفعيل ميزات العربي الأساسية
-        for feat in arabic_essentials:
-            command.extend(["-o", feat])
-        
-        # إضافة الخيارات التقنية
-        command.extend(["-r", "--no-rename", tmp_in_path, tmp_out_path])
-        
-        # تنفيذ العملية
-        subprocess.run(command, check=True, capture_output=True)
-        
-        # فحص النتيجة وقراءتها
-        if os.path.exists(tmp_out_path) and os.path.getsize(tmp_out_path) > 0:
-            with open(tmp_out_path, "rb") as f:
-                final_content = f.read()
-        else:
+        try:
+            command = [sys.executable, "-m", "pyftfeatfreeze"]
+            
+            # تفعيل كل ميزة وصلت من الموقع (بدون زيادة أو نقصان)
+            for feat in list(set(requested_features)):
+                command.extend(["-o", feat])
+            
+            command.extend(["-r", "--no-rename", tmp_in_path, tmp_out_path])
+            
+            subprocess.run(command, check=True, capture_output=True)
+            
+            if os.path.exists(tmp_out_path):
+                with open(tmp_out_path, "rb") as f:
+                    final_content = f.read()
+            else:
+                with open(tmp_in_path, "rb") as f:
+                    final_content = f.read()
+
+        except Exception as e:
+            print(f"Error: {e}")
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
+        # 4. إرسال الرد وتنظيف الملفات
         return Response(
             content=final_content, 
             media_type="font/ttf",
-            headers={"Content-Disposition": "attachment; filename=fontat_pro.ttf"}
+            headers={"Content-Disposition": "attachment; filename=fontat_fixed.ttf"}
         )
 
-    except Exception as e:
-        return Response(content=json.dumps({"error": str(e)}), status_code=400)
+    finally:
+        # تنظيف الملفات المؤقتة لضمان عدم امتلاء ذاكرة السيرفر
+        if tmp_in_path and os.path.exists(tmp_in_path): os.remove(tmp_in_path)
+        if tmp_out_path and os.path.exists(tmp_out_path): os.remove(tmp_out_path)
     
     finally:
         # 4. تنظيف السيرفر من الملفات المؤقتة (ضروري جداً)
