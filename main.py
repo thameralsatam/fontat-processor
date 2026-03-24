@@ -45,29 +45,31 @@ async def convert_font(
             
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
-        # 3. 🔥 التجميد الذكي مع حماية الربط العربي
-        # هذه الميزات "خط أحمر" لا يجوز حذفها حتى يظل الخط متصلاً
-        arabic_must_have = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
-        
-        # دمج الميزات المطلوبة من الموقع مع ميزات الحماية
-        features_to_freeze = list(set(requested_features + arabic_must_have))
-        features_str = ",".join(features_to_freeze)
+        # 3. 🔥 التفعيل الذكي (Default Activation)
+        # ميزات الربط العربي الأساسية + الميزات المطلوبة من المستخدم
+        arabic_essentials = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
+        all_to_activate = list(set(requested_features + arabic_essentials))
         
         try:
-            # استخدام sys.executable لضمان تشغيل الأداة في بيئة السيرفر
-            # أضفنا براميتر -r للحفاظ على باقي جداول الخط دون حذفها
-            subprocess.run(
-                [sys.executable, "-m", "pyftfeatfreeze", "-f", features_str, "-r", tmp_in_path, tmp_out_path], 
-                check=True, 
-                capture_output=True
-            )
+            # بناء الأمر برمجياً:
+            # نستخدم -o بدلاً من -f للحفاظ على ذكاء الميزة وسياقها
+            command = [sys.executable, "-m", "pyftfeatfreeze"]
+            
+            for feat in all_to_activate:
+                command.extend(["-o", feat]) # تفعيل الميزة كخيار افتراضي ذكي
+            
+            # إضافة براميتر الحفاظ على الجداول وملفات الدخل والخرج
+            command.extend(["-r", tmp_in_path, tmp_out_path])
+            
+            subprocess.run(command, check=True, capture_output=True)
             
             with open(tmp_out_path, "rb") as f:
                 final_content = f.read()
             if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
             
         except Exception as e:
-            # في حال الفشل نرجع الخط الثابت الأصلي لضمان عدم توقف الخدمة
+            # في حال الفشل نرجع الخط الثابت الأصلي لضمان استمرار الخدمة
+            print(f"Freezing Error: {e}")
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
