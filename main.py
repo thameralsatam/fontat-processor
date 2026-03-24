@@ -48,13 +48,12 @@ async def convert_font(
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
         # 3. 🔥 تنفيذ الميزات المطلوبة من الموقع فقط
-        requested_features = data.get("features", [])
-        
         try:
             command = [sys.executable, "-m", "pyftfeatfreeze"]
             
-            # تفعيل كل ميزة وصلت من الموقع (بدون زيادة أو نقصان)
-            for feat in list(set(requested_features)):
+            # تنظيف الميزات من التكرار لضمان عدم حدوث Error
+            unique_features = list(set(requested_features))
+            for feat in unique_features:
                 command.extend(["-o", feat])
             
             command.extend(["-r", "--no-rename", tmp_in_path, tmp_out_path])
@@ -69,25 +68,25 @@ async def convert_font(
                     final_content = f.read()
 
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Subprocess Error: {e}")
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
-        # 4. إرسال الرد وتنظيف الملفات
+        # 4. إرسال الرد
         return Response(
             content=final_content, 
             media_type="font/ttf",
             headers={"Content-Disposition": "attachment; filename=fontat_fixed.ttf"}
         )
 
+    except Exception as e:
+        return Response(content=json.dumps({"error": str(e)}), status_code=400)
+
     finally:
-        # تنظيف الملفات المؤقتة لضمان عدم امتلاء ذاكرة السيرفر
-        if tmp_in_path and os.path.exists(tmp_in_path): os.remove(tmp_in_path)
-        if tmp_out_path and os.path.exists(tmp_out_path): os.remove(tmp_out_path)
-    
-    finally:
-        # 4. تنظيف السيرفر من الملفات المؤقتة (ضروري جداً)
+        # 5. تنظيف السيرفر (مرة واحدة فقط وبشكل آمن)
         if tmp_in_path and os.path.exists(tmp_in_path):
-            os.remove(tmp_in_path)
+            try: os.remove(tmp_in_path)
+            except: pass
         if tmp_out_path and os.path.exists(tmp_out_path):
-            os.remove(tmp_out_path)
+            try: os.remove(tmp_out_path)
+            except: pass
