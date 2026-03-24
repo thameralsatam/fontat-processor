@@ -3,12 +3,9 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
+from fontTools.otTables import FeatureRecord, Feature
 import io
 import json
-import tempfile
-import subprocess
-import os
-import sys
 
 app = FastAPI()
 
@@ -20,18 +17,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def freeze_features(font: TTFont, features_to_freeze: list) -> TTFont:
+    """
+    يحول الميزات الاختيارية المختارة إلى ميزة rlig التي تعمل تلقائياً على كل الأجهزة.
+    """
+    if 'GSUB' not in font:
+        print("⚠️ No GSUB table found in font.")
+        return font
+
+    gsub = font['GSUB'].table
+    feature_list = gsub.FeatureList
+    script_list = gsub.ScriptList
+
+    # اجمع تعليمات الميزات المطلوبة وأرقام مواقعها
+    lookups_to_inject = []
+    feature_indices = []
+
+    for i, rec in enumerate(feature_list.FeatureRecord):
+        if rec.FeatureTag in features_to_freeze:
+            feature_indices.append(i)
+            for idx in rec.Feature.LookupListIndex:
+                if idx not in lookups_to_inject:
+                    lookups_to_inject.append(idx)
+
+    if not lookups_to_inject:
+        print(f"⚠️ No lookups found for features: {features_to_freeze}")
+        return font
+
+    # لكل script/language يحتوي على الميزات المطلوبة، أضف تعليماتها لـ rlig
+    for script_rec in script_list.ScriptRecord:
+        script = script_rec.Script
+        langs = ([script.DefaultLangSys] if script.DefaultLangSys else [])
+        langs += [ls.LangSys for ls in script.LangSysRecord]
+
+        for lang in langs:
+            if lang is None:
+                continue
+
+            # تحقق إذا هذا الـ lang يستخدم أي من الميزات المطلوبة
+            if not any(i in lang.FeatureIndex for i in feature_indices):
+                continue
+
+            # دور على rlig موجودة في هذا الـ lang
+            rlig_idx = next(
+                (fi for fi in lang.FeatureIndex
+                 if feature_list.FeatureRecord[fi].FeatureTag == 'rlig'),
+                None
+            )
+
+            if rlig_idx is not None:
+                # أضف التعليمات للـ rlig الموجودة
+                existing_lookups = feature_list.FeatureRecord[rlig_idx].Feature.LookupListIndex
+                for idx in lookups_to_inject:
+                    if idx not in existing_lookups:
+                        existing_lookups.append(idx)
+            else:
+                # أنشئ rlig جديدة وأضفها
+                new_feature = Feature()
+                new_feature.FeatureParams = None
+                new_feature.LookupListIndex = list(lookups_to_inject)
+
+                new_record = FeatureRecord()
+                new_record.FeatureTag = 'rlig'
+                new_record.Feature = new_feature
+
+                new_index = len(feature_list.FeatureRecord)
+                feature_list.FeatureRecord.append(new_record)
+                feature_list.FeatureCount = len(feature_list.FeatureRecord)
+                lang.FeatureIndex.append(new_index)
+
+    print(f"✅ Features {features_to_freeze} frozen successfully.")
+    return font
+
+
 @app.post("/convert")
 async def convert_font(
     font: UploadFile = File(...),
-    settings: str = Form(...) 
+    settings: str = Form(...)
 ):
-    tmp_in_path = None
-    tmp_out_path = None
     try:
         # 1. قراءة الإعدادات والميزات المطلوبة
         data = json.loads(settings)
         requested_features = data.get("features", [])
-        
+
         input_data = await font.read()
         var_font = TTFont(io.BytesIO(input_data))
 
@@ -45,64 +114,32 @@ async def convert_font(
                 except Exception as inst_e:
                     print(f"Instancer Warning: {inst_e}")
 
-        # 3. حفظ الخط في ملف مؤقت لمعالجته
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp_in:
-            var_font.save(tmp_in.name)
-            tmp_in_path = tmp_in.name
-            
-        tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
+        # 3. تجميد الميزات المطلوبة
+        # الميزات الأساسية التي تعمل تلقائياً ولا نحتاج لتعديلها
+        forbidden_features = {"init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"}
 
-        # 4. 🔥 تنفيذ تجميد الميزات (Feature Freezing)
-        try:
-            # ميزات الربط العربي الأساسية (نتجنب تجميدها لأنها تسبب خطأ وتعمل تلقائياً)
-            forbidden_features = {"init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"}
-            
-            if isinstance(requested_features, str):
-                raw_list = requested_features.split(',')
-            else:
-                raw_list = requested_features
-                
-            # تصفية الميزات (إبقاء الاختيارية مثل ss01, ss02 وحذف الأساسية والتكرار)
-            features_to_freeze = [f.strip() for f in raw_list if f.strip() and f.strip() not in forbidden_features]
-            features_to_freeze = list(set(features_to_freeze))
-            
-            if features_to_freeze:
-                # استخدام الأمر المباشر مع الاختصارات الصحيحة المتوافقة مع السيرفر
-                command = ["pyftfeatfreeze"]
-                
-                for feat in features_to_freeze:
-                    command.extend(["-f", feat])
-                
-                # -n: لعدم تغيير اسم الخط الداخلي (No Rename)
-                # -r: لإعادة ربط الميزات (Remap)
-                command.extend(["-n", "-r", tmp_in_path, tmp_out_path])
-                
-                print(f"🚀 Executing Command: {' '.join(command)}")
-                
-                # تنفيذ العملية والتقاط النتيجة
-                result = subprocess.run(command, capture_output=True, text=True)
-                
-                if result.returncode != 0:
-                    print(f"❌ Tool Error: {result.stderr}")
-                    final_path = tmp_in_path
-                else:
-                    print(f"✅ Success: Features {features_to_freeze} frozen.")
-                    final_path = tmp_out_path if os.path.exists(tmp_out_path) else tmp_in_path
-            else:
-                print("⚠️ No optional features to freeze. Returning base font.")
-                final_path = tmp_in_path
+        if isinstance(requested_features, str):
+            raw_list = requested_features.split(',')
+        else:
+            raw_list = requested_features
 
-            with open(final_path, "rb") as f:
-                final_content = f.read()
+        features_to_freeze = list(set(
+            f.strip() for f in raw_list
+            if f.strip() and f.strip() not in forbidden_features
+        ))
 
-        except Exception as tool_e:
-            print(f"❌ Subprocess Exception: {tool_e}")
-            with open(tmp_in_path, "rb") as f:
-                final_content = f.read()
+        if features_to_freeze:
+            var_font = freeze_features(var_font, features_to_freeze)
+        else:
+            print("⚠️ No optional features to freeze. Returning base font.")
 
-        # 5. إرسال ملف الخط النهائي
+        # 4. حفظ الخط وإرساله
+        output = io.BytesIO()
+        var_font.save(output)
+        final_content = output.getvalue()
+
         return Response(
-            content=final_content, 
+            content=final_content,
             media_type="font/ttf",
             headers={"Content-Disposition": "attachment; filename=fontat_fixed.ttf"}
         )
@@ -110,24 +147,3 @@ async def convert_font(
     except Exception as e:
         print(f"🔥 Global Error: {e}")
         return Response(content=json.dumps({"error": str(e)}), status_code=400)
-
-    finally:
-        # 6. تنظيف الملفات المؤقتة فوراً لضمان عدم امتلاء الذاكرة
-        if tmp_in_path and os.path.exists(tmp_in_path):
-            try: os.remove(tmp_in_path)
-            except: pass
-        if tmp_out_path and os.path.exists(tmp_out_path):
-            try: os.remove(tmp_out_path)
-            except: pass
-    except Exception as e:
-        print(f"🔥 Global Error: {e}")
-        return Response(content=json.dumps({"error": str(e)}), status_code=400)
-
-    finally:
-        # 6. تنظيف الملفات المؤقتة من السيرفر
-        if tmp_in_path and os.path.exists(tmp_in_path):
-            try: os.remove(tmp_in_path)
-            except: pass
-        if tmp_out_path and os.path.exists(tmp_out_path):
-            try: os.remove(tmp_out_path)
-            except: pass
