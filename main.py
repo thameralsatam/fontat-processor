@@ -50,36 +50,36 @@ async def convert_font(
         arabic_essentials = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
         all_to_activate = list(set(requested_features + arabic_essentials))
         
+# استبدل الجزء رقم 3 بهذا المنطق المطور
+        # 3. 🔥 التفعيل الاحترافي (Smart Default Activation)
+        # ميزات الربط العربي الأساسية
+        arabic_essentials = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
+        
         try:
-            # بناء الأمر برمجياً:
-            # نستخدم -o بدلاً من -f للحفاظ على ذكاء الميزة وسياقها
+            # المنطق المتبع في GitHub لإجبار الميزات دون تخريب:
+            # نستخدم -o (On) لتفعيل الميزة برمجياً داخل جدول الميزات (Feature List)
+            # ونستخدم -r (Remap) لإعادة بناء خريطة المحارف
+            
             command = [sys.executable, "-m", "pyftfeatfreeze"]
             
-            for feat in all_to_activate:
-                command.extend(["-o", feat]) # تفعيل الميزة كخيار افتراضي ذكي
+            # تفعيل ميزات المستخدم لتكون "ON" افتراضياً
+            for feat in requested_features:
+                command.extend(["-o", feat])
             
-            # إضافة براميتر الحفاظ على الجداول وملفات الدخل والخرج
-            command.extend(["-r", tmp_in_path, tmp_out_path])
+            # التأكد من بقاء ميزات العربي "ON" افتراضياً
+            for feat in arabic_essentials:
+                command.extend(["-o", feat])
             
-            subprocess.run(command, check=True, capture_output=True)
+            # إضافة الخيارات التقنية لضمان عدم حذف أي "Lookup" ذكي
+            command.extend(["-r", "--no-rename", tmp_in_path, tmp_out_path])
             
-            with open(tmp_out_path, "rb") as f:
-                final_content = f.read()
-            if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
+            result = subprocess.run(command, check=True, capture_output=True)
             
-        except Exception as e:
-            # في حال الفشل نرجع الخط الثابت الأصلي لضمان استمرار الخدمة
-            print(f"Freezing Error: {e}")
-            with open(tmp_in_path, "rb") as f:
-                final_content = f.read()
-
-        if os.path.exists(tmp_in_path): os.remove(tmp_in_path)
-
-        return Response(
-            content=final_content, 
-            media_type="font/ttf",
-            headers={"Content-Disposition": "attachment; filename=fontat_pro.ttf"}
-        )
-
-    except Exception as e:
-        return Response(content=json.dumps({"error": str(e)}), status_code=400)
+            # فحص إذا كان هناك محتوى في الملف الناتج
+            if os.path.exists(tmp_out_path) and os.path.getsize(tmp_out_path) > 0:
+                with open(tmp_out_path, "rb") as f:
+                    final_content = f.read()
+            else:
+                # إذا فشل التجميد، نعود للنسخة الثابتة الأصلية
+                with open(tmp_in_path, "rb") as f:
+                    final_content = f.read()
