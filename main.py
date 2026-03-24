@@ -47,33 +47,50 @@ async def convert_font(
             
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
-        # 3. 🔥 تنفيذ الميزات المطلوبة من الموقع فقط
+        # 3. 🔥 تنفيذ الميزات (الفلترة الذكية والتجميد الصحيح)
         try:
-            command = [sys.executable, "-m", "pyftfeatfreeze"]
+            # قائمة الميزات الأساسية التي "يمنع" تجميدها لأنها تسبب انهيار الأداة
+            forbidden_features = {"init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"}
             
-            # تنظيف الميزات من التكرار
-            unique_features = list(set(requested_features))
-            
-            # تمرير الميزات بالطريقة الصحيحة لأداة pyftfeatfreeze
-            if unique_features:
-                features_str = ",".join(unique_features)
-                command.extend(["-f", features_str])
-            
-            # تحديد ملف الإدخال والإخراج 
-            # (تم إزالة -o الخاطئة واستخدام المسارات كـ Positional Arguments)
-            command.extend(["--no-rename", tmp_in_path, tmp_out_path])
-            
-            subprocess.run(command, check=True, capture_output=True)
-            
-            if os.path.exists(tmp_out_path):
-                with open(tmp_out_path, "rb") as f:
-                    final_content = f.read()
+            # تحويل الميزات لقائمة وتأكيد أنها نصوص
+            if isinstance(requested_features, str):
+                raw_list = requested_features.split(',')
             else:
-                with open(tmp_in_path, "rb") as f:
-                    final_content = f.read()
+                raw_list = requested_features
+                
+            # الفلترة: نأخذ فقط الميزات الاختيارية (مثل ss01) ونمنع الأساسية
+            features_to_freeze = [f.strip() for f in raw_list if f.strip() and f.strip() not in forbidden_features]
+            features_to_freeze = list(set(features_to_freeze)) # إزالة التكرار
+            
+            if features_to_freeze:
+                command = [sys.executable, "-m", "pyftfeatfreeze"]
+                
+                # إضافة كل ميزة بشكل منفصل (هنا السر عشان ما تضرب الأداة!)
+                for feat in features_to_freeze:
+                    command.extend(["-f", feat])
+                
+                # إضافة الخيارات التقنية ومسارات الملفات
+                command.extend(["--no-rename", tmp_in_path, tmp_out_path])
+                
+                print(f"Executing: {' '.join(command)}") # لمراقبة الأمر في Logs ريندر
+                
+                result = subprocess.run(command, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"❌ Tool Error: {result.stderr}")
+                    final_path = tmp_in_path
+                else:
+                    final_path = tmp_out_path if os.path.exists(tmp_out_path) else tmp_in_path
+            else:
+                print("⚠️ لا توجد ميزات اختيارية لتجميدها (تم تجاهل الميزات الأساسية).")
+                final_path = tmp_in_path
+
+            # قراءة الملف النهائي
+            with open(final_path, "rb") as f:
+                final_content = f.read()
 
         except Exception as e:
-            print(f"Subprocess Error: {e}")
+            print(f"❌ Error: {e}")
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
