@@ -8,6 +8,7 @@ import json
 import tempfile
 import subprocess
 import os
+import sys
 
 app = FastAPI()
 
@@ -37,50 +38,45 @@ async def convert_font(
             if location:
                 var_font = instancer.instantiateVariableFont(var_font, location)
 
-        # 2. حفظ الخط الثابت في ملف مؤقت عشان نقدر نمرره لأداة التجميد
+        # 2. حفظ الخط في ملف مؤقت
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp_in:
             var_font.save(tmp_in.name)
             tmp_in_path = tmp_in.name
             
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
-        # 3. 🔥 التجميد الفعلي (Feature Freezing)
-        if requested_features:
-            # تحويل قائمة الميزات لنص مفصول بفواصل (مثل: liga,ss01)
-            features_str = ",".join(requested_features)
+        # 3. 🔥 التجميد الذكي مع حماية الربط العربي
+        # هذه الميزات "خط أحمر" لا يجوز حذفها حتى يظل الخط متصلاً
+        arabic_must_have = ["init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"]
+        
+        # دمج الميزات المطلوبة من الموقع مع ميزات الحماية
+        features_to_freeze = list(set(requested_features + arabic_must_have))
+        features_str = ",".join(features_to_freeze)
+        
+        try:
+            # استخدام sys.executable لضمان تشغيل الأداة في بيئة السيرفر
+            # أضفنا براميتر -r للحفاظ على باقي جداول الخط دون حذفها
+            subprocess.run(
+                [sys.executable, "-m", "pyftfeatfreeze", "-f", features_str, "-r", tmp_in_path, tmp_out_path], 
+                check=True, 
+                capture_output=True
+            )
             
-            try:
-                # تشغيل أداة pyftfeatfreeze من داخل البايثون
-                subprocess.run(
-                    ["pyftfeatfreeze", "-f", features_str, tmp_in_path, tmp_out_path], 
-                    check=True, 
-                    capture_output=True
-                )
-                
-                # قراءة الخط بعد التجميد
-                with open(tmp_out_path, "rb") as f:
-                    final_content = f.read()
-                os.remove(tmp_out_path) # تنظيف
-                
-            except subprocess.CalledProcessError as e:
-                # لو صار خطأ في التجميد، نرجع الخط بدون تجميد أحسن ما نعطي إيرور
-                print("Freezing Error:", e.stderr.decode())
-                with open(tmp_in_path, "rb") as f:
-                    final_content = f.read()
-        else:
-            # إذا ما اختار ميزات، نرجع الخط كما هو
+            with open(tmp_out_path, "rb") as f:
+                final_content = f.read()
+            if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
+            
+        except Exception as e:
+            # في حال الفشل نرجع الخط الثابت الأصلي لضمان عدم توقف الخدمة
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
-        # تنظيف الملف المؤقت الأول
-        if os.path.exists(tmp_in_path):
-            os.remove(tmp_in_path)
+        if os.path.exists(tmp_in_path): os.remove(tmp_in_path)
 
-        # 4. إرسال الخط الجاهز للموقع
         return Response(
             content=final_content, 
             media_type="font/ttf",
-            headers={"Content-Disposition": "attachment; filename=fontat_frozen.ttf"}
+            headers={"Content-Disposition": "attachment; filename=fontat_pro.ttf"}
         )
 
     except Exception as e:
