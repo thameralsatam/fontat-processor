@@ -2,5 +2,5 @@ fastapi
 uvicorn
 python-multipart
 fonttools
-brotli
 opentype-feature-freezer
+brotli
