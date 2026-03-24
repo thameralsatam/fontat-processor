@@ -12,7 +12,7 @@ import sys
 
 app = FastAPI()
 
-# إعدادات الـ CORS للسماح للموقع بالاتصال بالسيرفر
+# إعدادات الـ CORS لضمان اتصال الموقع بالسيرفر بدون مشاكل
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,14 +28,14 @@ async def convert_font(
     tmp_in_path = None
     tmp_out_path = None
     try:
-        # 1. تحليل البيانات القادمة من الموقع
+        # 1. قراءة الإعدادات والميزات المطلوبة
         data = json.loads(settings)
         requested_features = data.get("features", [])
         
         input_data = await font.read()
         var_font = TTFont(io.BytesIO(input_data))
 
-        # 2. تثبيت المحاور المتغيرة (مثل الوزن wght)
+        # 2. تثبيت محاور الخط المتغير (Variable Font Axes)
         if 'fvar' in var_font:
             available_axes = {a.axisTag for a in var_font['fvar'].axes}
             location = {k: v for k, v in data.items() if k in available_axes}
@@ -45,50 +45,51 @@ async def convert_font(
                 except Exception as inst_e:
                     print(f"Instancer Warning: {inst_e}")
 
-        # 3. حفظ النسخة المؤقتة للخط لمعالجتها بالأداة
+        # 3. حفظ الخط في ملف مؤقت لمعالجته
         with tempfile.NamedTemporaryFile(delete=False, suffix=".ttf") as tmp_in:
             var_font.save(tmp_in.name)
             tmp_in_path = tmp_in.name
             
         tmp_out_path = tmp_in_path.replace(".ttf", "_frozen.ttf")
 
-        # 4. 🔥 عملية تجميد الميزات (Freezing)
+        # 4. 🔥 تنفيذ تجميد الميزات (Feature Freezing)
         try:
-            # ميزات تسبب انهيار الأداة في العربي (يتم تجاهلها هنا لأنها تعمل تلقائياً)
+            # ميزات الربط العربي الأساسية (نتجنب تجميدها لأنها تسبب خطأ وتعمل تلقائياً)
             forbidden_features = {"init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"}
             
-            # معالجة قائمة الميزات
             if isinstance(requested_features, str):
                 raw_list = requested_features.split(',')
             else:
                 raw_list = requested_features
                 
-            # تنظيف القائمة (إزالة الممنوعات والتكرار)
+            # تصفية الميزات (إبقاء الاختيارية مثل ss01, ss02 وحذف الأساسية والتكرار)
             features_to_freeze = [f.strip() for f in raw_list if f.strip() and f.strip() not in forbidden_features]
             features_to_freeze = list(set(features_to_freeze))
             
             if features_to_freeze:
-                # نستخدم الأمر المباشر pyftfeatfreeze (حل مشكلة No module named)
+                # استخدام الأمر المباشر مع الاختصارات الصحيحة المتوافقة مع السيرفر
                 command = ["pyftfeatfreeze"]
                 
                 for feat in features_to_freeze:
                     command.extend(["-f", feat])
                 
-                command.extend(["--no-rename", tmp_in_path, tmp_out_path])
+                # -n: لعدم تغيير اسم الخط الداخلي (No Rename)
+                # -r: لإعادة ربط الميزات (Remap)
+                command.extend(["-n", "-r", tmp_in_path, tmp_out_path])
                 
                 print(f"🚀 Executing Command: {' '.join(command)}")
                 
-                # تنفيذ الأمر مع التقاط الأخطاء
+                # تنفيذ العملية والتقاط النتيجة
                 result = subprocess.run(command, capture_output=True, text=True)
                 
                 if result.returncode != 0:
-                    print(f"❌ Tool Error Output: {result.stderr}")
+                    print(f"❌ Tool Error: {result.stderr}")
                     final_path = tmp_in_path
                 else:
                     print(f"✅ Success: Features {features_to_freeze} frozen.")
                     final_path = tmp_out_path if os.path.exists(tmp_out_path) else tmp_in_path
             else:
-                print("⚠️ No optional features to freeze.")
+                print("⚠️ No optional features to freeze. Returning base font.")
                 final_path = tmp_in_path
 
             with open(final_path, "rb") as f:
@@ -99,13 +100,25 @@ async def convert_font(
             with open(tmp_in_path, "rb") as f:
                 final_content = f.read()
 
-        # 5. إرسال الخط المعدل للمستخدم
+        # 5. إرسال ملف الخط النهائي
         return Response(
             content=final_content, 
             media_type="font/ttf",
-            headers={"Content-Disposition": "attachment; filename=fontat_pro.ttf"}
+            headers={"Content-Disposition": "attachment; filename=fontat_fixed.ttf"}
         )
 
+    except Exception as e:
+        print(f"🔥 Global Error: {e}")
+        return Response(content=json.dumps({"error": str(e)}), status_code=400)
+
+    finally:
+        # 6. تنظيف الملفات المؤقتة فوراً لضمان عدم امتلاء الذاكرة
+        if tmp_in_path and os.path.exists(tmp_in_path):
+            try: os.remove(tmp_in_path)
+            except: pass
+        if tmp_out_path and os.path.exists(tmp_out_path):
+            try: os.remove(tmp_out_path)
+            except: pass
     except Exception as e:
         print(f"🔥 Global Error: {e}")
         return Response(content=json.dumps({"error": str(e)}), status_code=400)
