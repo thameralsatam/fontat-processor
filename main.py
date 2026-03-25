@@ -114,25 +114,28 @@ async def convert_font(
                     var_font = instancer.instantiateVariableFont(var_font, location)
                 except Exception as inst_e:
                     print(f"Instancer Warning: {inst_e}")
-
-        # 3. تجميد الميزات المطلوبة
-        # الميزات الأساسية التي تعمل تلقائياً ولا نحتاج لتعديلها
-        forbidden_features = {"init", "medi", "fina", "isol", "rlig", "calt", "ccmp", "mark", "mkmk"}
-
-        if isinstance(requested_features, str):
-            raw_list = requested_features.split(',')
-        else:
-            raw_list = requested_features
-
-        features_to_freeze = list(set(
-            f.strip() for f in raw_list
-            if f.strip() and f.strip() not in forbidden_features
-        ))
-
-        if features_to_freeze:
-            var_font = freeze_features(var_font, features_to_freeze)
-        else:
-            print("⚠️ No optional features to freeze. Returning base font.")
+                    
+        # 2. تثبيت محاور الخط المتغير (Variable Font Axes) - النسخة المصلحة
+        if 'fvar' in var_font:
+            # نجلب أسماء المحاور الموجودة في الخط فعلياً
+            available_axes = {a.axisTag for a in var_font['fvar'].axes}
+            
+            location = {}
+            for k, v in data.items():
+                # إذا كان المفتاح موجود في محاور الخط وهو ليس قائمة الميزات
+                if k in available_axes:
+                    try:
+                        # تحويل القيمة لرقم عشري ضروري جداً لنجاح العملية
+                        location[k] = float(v)
+                    except:
+                        continue
+            
+            if location:
+                try:
+                    print(f"Applying location: {location}") # عشان تشوفه في الـ Logs
+                    var_font = instancer.instantiateVariableFont(var_font, location)
+                except Exception as inst_e:
+                    print(f"❌ Instancer Error: {inst_e}")
 
         # 4. حفظ الخط وإرساله
         output = io.BytesIO()
